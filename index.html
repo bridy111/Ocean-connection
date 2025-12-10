@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>海洋消消乐</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", sans-serif;
+            -webkit-tap-highlight-color: transparent; /* 取消手机点击高亮 */
+        }
+        body {
+            background: #f0f8fb;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            touch-action: none; /* 禁用默认触摸行为（关键优化） */
+        }
+        .game-header {
+            width: 100%;
+            max-width: 450px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .game-title {
+            color: #2d5b79;
+            font-size: 20px;
+        }
+        .play-count {
+            color: #d9534f;
+            font-size: 14px;
+            background: #fff;
+            padding: 4px 8px;
+            border-radius: 16px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .game-info {
+            margin-bottom: 10px;
+            text-align: center;
+            display: flex;
+            gap: 30px;
+        }
+        .info-item {
+            font-size: 16px;
+            color: #333;
+        }
+        .info-item span {
+            font-weight: bold;
+            color: #2d5b79;
+        }
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr); /* 自适应宽度（关键优化） */
+            gap: 8px;
+            background: #e8f4f8;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 450px;
+        }
+        .grid-cell {
+            aspect-ratio: 1/1; /* 正方形格子（关键优化） */
+            background: #fff;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            cursor: pointer;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .grid-cell.selected {
+            background: #ffe485;
+            box-shadow: 0 0 0 2px #ffc107;
+        }
+        .grid-cell.empty {
+            background: #f5f5f5;
+            opacity: 0.5;
+        }
+        /* 加速动画（关键优化：缩短动画时长） */
+        @keyframes fall {
+            from { transform: translateY(-80px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .grid-cell.fall {
+            animation: fall 0.15s ease-out forwards; /* 原0.3s → 0.15s */
+        }
+        @keyframes pop {
+            0% { transform: scale(0.5); opacity: 0; }
+            70% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .grid-cell.pop {
+            animation: pop 0.15s ease-out forwards; /* 原0.3s → 0.15s */
+        }
+        .tips {
+            margin-top: 15px;
+            color: #666;
+            font-size: 14px;
+            line-height: 1.4;
+            text-align: center;
+            max-width: 450px;
+        }
+        .btn-restart {
+            margin-top: 12px;
+            padding: 7px 18px;
+            background: #2d5b79;
+            color: #fff;
+            border: none;
+            border-radius: 16px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-restart:hover {
+            background: #1a3b53;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-header">
+        <h2 class="game-title">龙宫游园会·海洋消消乐</h2>
+        <div class="play-count">今日剩余正式局：<span id="official-count">2</span></div>
+    </div>
+
+    <div class="game-info">
+        <div class="info-item">得分：<span id="score">0</span></div>
+        <div class="info-item">剩余：<span id="remain-connect">10</span></div>
+    </div>
+
+    <div class="grid-container" id="gridContainer"></div>
+
+    <button class="btn-restart" id="restartBtn">重新开始</button>
+
+    <div class="tips">
+        🔹 按住拖动连3个以上相同生物（可斜连）<br>
+        🔹 10次连线后结算，90分获「特」级积分
+    </div>
+
+    <script>
+        // 1. 游戏配置（极速优化）
+        const config = {
+            gridSize: 5,
+            types: ['🐟', '🦐', '🐚', '🦀','🐠','🦑'],
+            maxConnect: 10,
+            dailyOfficialCount: 2,
+            scoreRules: { 3: 5, 4: 12, 5: 25, '6+': 40 },
+            rankRules: [
+                { min: 90, rank: '特', reward: 20 },
+                { min: 60, rank: '优', reward: 15 },
+                { min: 30, rank: '良', reward: 10 },
+                { min: 0, rank: '差', reward: 0 }
+            ]
+        };
+
+        // 2. 全局状态
+        let gameGrid = [];
+        let currentScore = 0;
+        let connectCount = 0;
+        let startPos = null;
+        let path = [];
+        let isDragging = false;
+        let remainingOfficialCount = config.dailyOfficialCount;
+        let isOfficialGame = false;
+        let gridCells = []; // 缓存格子DOM（避免频繁查询，关键优化）
+
+        // 3. DOM元素
+        const gridContainer = document.getElementById('gridContainer');
+        const scoreEl = document.getElementById('score');
+        const remainConnectEl = document.getElementById('remain-connect');
+        const officialCountEl = document.getElementById('official-count');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // 4. 初始化游戏（简化流程）
+        function initGrid(isOfficial = false) {
+            isOfficialGame = isOfficial;
+            // 生成棋盘（简化数组创建，关键优化）
+            gameGrid = [];
+            for (let i = 0; i < config.gridSize; i++) {
+                const row = [];
+                for (let j = 0; j < config.gridSize; j++) {
+                    row.push(config.types[Math.floor(Math.random() * config.types.length)]);
+                }
+                gameGrid.push(row);
+            }
+            currentScore = 0;
+            connectCount = 0;
+            path = [];
+            startPos = null;
+            updateInfo();
+            renderGrid();
+            ensurePlayableGrid();
+
+            // 正式局处理（简化逻辑）
+            if (isOfficial && remainingOfficialCount > 0) {
+                remainingOfficialCount--;
+                officialCountEl.textContent = remainingOfficialCount;
+                localStorage.setItem('oceanMatchOfficialCount', remainingOfficialCount);
+            }
+        }
+
+        // 5. 渲染棋盘（缓存DOM+减少操作，关键优化）
+        function renderGrid(animateCells = []) {
+            gridContainer.innerHTML = '';
+            gridCells = []; // 重置缓存
+            const animateMap = new Map(); // 用Map快速查询动画（关键优化）
+            animateCells.forEach(cell => animateMap.set(`${cell.row}-${cell.col}`, cell.type));
+
+            for (let rowIdx = 0; rowIdx < config.gridSize; rowIdx++) {
+                for (let colIdx = 0; colIdx < config.gridSize; colIdx++) {
+                    const cell = gameGrid[rowIdx][colIdx];
+                    const cellEl = document.createElement('div');
+                    cellEl.className = 'grid-cell';
+                    cellEl.dataset.row = rowIdx; // 存储坐标（避免重新计算）
+                    cellEl.dataset.col = colIdx;
+                    
+                    if (!cell) cellEl.classList.add('empty');
+                    // 选中状态（简化判断，关键优化）
+                    if (path.some(p => p.row === rowIdx && p.col === colIdx)) {
+                        cellEl.classList.add('selected');
+                    }
+                    cellEl.textContent = cell || '';
+
+                    // 快速添加动画（关键优化）
+                    const animateType = animateMap.get(`${rowIdx}-${colIdx}`);
+                    if (animateType) cellEl.classList.add(animateType);
+
+                    // 触摸事件（简化绑定，关键优化）
+                    cellEl.addEventListener('touchstart', handleTouchStart);
+                    cellEl.addEventListener('touchmove', handleTouchMove);
+
+                    gridContainer.appendChild(cellEl);
+                    gridCells.push(cellEl); // 缓存DOM
+                }
+            }
+
+            // 全局触摸结束（只绑定1次，关键优化）
+            document.ontouchend = handleTouchEnd;
+            document.onmouseup = handleMouseUp;
+        }
+
+        // 检查是否存在可连成3个及以上的组合（含斜向）
+        function hasConnectable() {
+            const visited = Array.from({ length: config.gridSize }, () => Array(config.gridSize).fill(false));
+            const dirs = [
+                [1, 0], [-1, 0], [0, 1], [0, -1],
+                [1, 1], [1, -1], [-1, 1], [-1, -1]
+            ];
+            for (let r = 0; r < config.gridSize; r++) {
+                for (let c = 0; c < config.gridSize; c++) {
+                    if (!gameGrid[r][c] || visited[r][c]) continue;
+                    const target = gameGrid[r][c];
+                    const queue = [[r, c]];
+                    visited[r][c] = true;
+                    let count = 0;
+                    while (queue.length) {
+                        const [cr, cc] = queue.pop();
+                        count++;
+                        for (const [dr, dc] of dirs) {
+                            const nr = cr + dr, nc = cc + dc;
+                            if (nr < 0 || nr >= config.gridSize || nc < 0 || nc >= config.gridSize) continue;
+                            if (visited[nr][nc]) continue;
+                            if (gameGrid[nr][nc] === target) {
+                                visited[nr][nc] = true;
+                                queue.push([nr, nc]);
+                            }
+                        }
+                    }
+                    if (count >= 3) return true;
+                }
+            }
+            return false;
+        }
+
+        // 当无可消除组合时，自动重排棋盘（保留当前得分和次数）
+        function ensurePlayableGrid() {
+            if (hasConnectable()) return;
+            let attempts = 0;
+            while (attempts < 30) {
+                for (let r = 0; r < config.gridSize; r++) {
+                    for (let c = 0; c < config.gridSize; c++) {
+                        gameGrid[r][c] = config.types[Math.floor(Math.random() * config.types.length)];
+                    }
+                }
+                if (hasConnectable()) break;
+                attempts++;
+            }
+            renderGrid();
+        }
+
+        // 6. 触摸事件优化（合并逻辑+减少计算）
+        function handleTouchStart(e) {
+            e.preventDefault();
+            const row = parseInt(this.dataset.row);
+            const col = parseInt(this.dataset.col);
+            if (gameGrid[row][col]) {
+                startPos = { row, col };
+                path = [{ row, col }];
+                updateSelectedCells(); // 单独更新选中状态（避免全量渲染）
+            }
+        }
+
+        function handleTouchMove(e) {
+            e.preventDefault();
+            if (!startPos) return;
+            const touch = e.touches[0];
+            // 快速获取目标格子（减少DOM查询，关键优化）
+            const target = document.elementFromPoint(touch.clientX, touch.clientY);
+            if (!target || !target.classList.contains('grid-cell')) return;
+
+            const row = parseInt(target.dataset.row);
+            const col = parseInt(target.dataset.col);
+            if (!gameGrid[row][col]) return;
+
+            const lastPos = path[path.length - 1];
+            // 简化规则判断（关键优化）
+            const isAdjacent = Math.abs(row - lastPos.row) <= 1 && Math.abs(col - lastPos.col) <= 1;
+            const isDuplicate = path.some(p => p.row === row && p.col === col);
+            const isSameType = gameGrid[row][col] === gameGrid[startPos.row][startPos.col];
+
+            if (isAdjacent && !isDuplicate && isSameType) {
+                path.push({ row, col });
+                updateSelectedCells(); // 单独更新选中状态
+            }
+        }
+
+        function handleTouchEnd() {
+            if (path.length >= 3) {
+                handleConnect(); // 直接处理连线结算（减少延迟）
+            } else {
+                path = [];
+                updateSelectedCells();
+            }
+            startPos = null;
+        }
+
+        // 7. 鼠标事件（简化适配）
+        function handleMouseUp() {
+            if (isDragging) {
+                isDragging = false;
+                handleTouchEnd();
+            }
+        }
+
+        // 8. 单独更新选中状态（避免全量渲染，关键优化）
+        function updateSelectedCells() {
+            gridCells.forEach(cellEl => {
+                const row = parseInt(cellEl.dataset.row);
+                const col = parseInt(cellEl.dataset.col);
+                const isSelected = path.some(p => p.row === row && p.col === col);
+                if (isSelected) cellEl.classList.add('selected');
+                else cellEl.classList.remove('selected');
+            });
+        }
+
+        // 9. 连线结算（简化流程+减少延迟）
+        function handleConnect() {
+            // 计算得分（简化逻辑）
+            const connectNum = path.length;
+            const addScore = connectNum >= 6 ? config.scoreRules['6+'] : config.scoreRules[connectNum];
+            currentScore += addScore;
+            connectCount += 1;
+
+            // 消除格子（简化循环）
+            path.forEach(({ row, col }) => gameGrid[row][col] = null);
+
+            // 立即更新信息（无延迟）
+            updateInfo();
+            updateSelectedCells();
+
+            // 加速补位（延迟从300ms→100ms，关键优化）
+            setTimeout(() => {
+                const animateCells = fillEmptyCells();
+                renderGrid(animateCells);
+                ensurePlayableGrid();
+
+                // 游戏结束判断（简化）
+                if (connectCount >= config.maxConnect) {
+                    setTimeout(endGame, 200); // 延迟从800ms→200ms
+                }
+            }, 100);
+
+            // 重置状态
+            path = [];
+            startPos = null;
+        }
+
+        // 10. 补位逻辑（简化计算，关键优化）
+        function fillEmptyCells() {
+            const animateCells = [];
+            // 每列补位（简化循环）
+            for (let col = 0; col < config.gridSize; col++) {
+                const column = [];
+                // 收集非空格子
+                for (let row = 0; row < config.gridSize; row++) {
+                    if (gameGrid[row][col]) column.push(gameGrid[row][col]);
+                }
+                // 填充空缺
+                const emptyCount = config.gridSize - column.length;
+                for (let row = 0; row < config.gridSize; row++) {
+                    if (row < emptyCount) {
+                        gameGrid[row][col] = config.types[Math.floor(Math.random() * config.types.length)];
+                        animateCells.push({ row, col, type: 'pop' });
+                    } else {
+                        gameGrid[row][col] = column[row - emptyCount];
+                        animateCells.push({ row, col, type: 'fall' });
+                    }
+                }
+            }
+            return animateCells;
+        }
+
+        // 11. 游戏结束（简化弹窗逻辑）
+        function endGame() {
+            const rankInfo = config.rankRules.find(r => currentScore >= r.min);
+            let alertMsg = `得分：${currentScore} | 评级：${rankInfo.rank}\n`;
+            
+            if (isOfficialGame) {
+                alertMsg += `积分：${rankInfo.reward}分\n剩余正式局：${remainingOfficialCount}次`;
+            } else {
+                alertMsg += `（试玩模式）`;
+            }
+
+            alert(alertMsg);
+            initGrid(false);
+        }
+
+        // 12. 更新信息（简化DOM操作）
+        function updateInfo() {
+            scoreEl.textContent = currentScore;
+            remainConnectEl.textContent = config.maxConnect - connectCount;
+        }
+
+        // 13. 重新开始按钮（简化逻辑）
+        restartBtn.addEventListener('click', () => {
+            let isOfficial = false;
+            if (remainingOfficialCount > 0) {
+                isOfficial = confirm(`剩余${remainingOfficialCount}次正式局，是否开启？`);
+            }
+            initGrid(isOfficial);
+        });
+
+        // 14. 页面加载（简化本地存储逻辑）
+        window.addEventListener('load', () => {
+            const today = new Date().toDateString();
+            const savedDate = localStorage.getItem('oceanMatchDate');
+            
+            if (savedDate !== today) {
+                remainingOfficialCount = config.dailyOfficialCount;
+                localStorage.setItem('oceanMatchDate', today);
+                localStorage.setItem('oceanMatchOfficialCount', remainingOfficialCount);
+            } else {
+                const savedCount = localStorage.getItem('oceanMatchOfficialCount');
+                if (savedCount) remainingOfficialCount = parseInt(savedCount);
+            }
+
+            officialCountEl.textContent = remainingOfficialCount;
+            initGrid(false);
+        });
+
+        // 禁用文字选中（简化）
+        document.addEventListener('selectstart', e => e.preventDefault());
+    </script>
+</body>
+</html>
